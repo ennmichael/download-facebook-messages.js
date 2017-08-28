@@ -86,7 +86,7 @@ class FacebookHomePage extends Page {
 
 class FacebookMessengerPage extends Page {
   static loadMessagesWith(driver, targetId) {
-    driver.get(FacebookMessengerPage.uriForUser(targetId))
+    return driver.get(FacebookMessengerPage.uriForUser(targetId))
     .then(
       NotificationsDialogue.denyIfNeeded(driver)
     )
@@ -121,10 +121,23 @@ class FacebookMessengerPage extends Page {
     );
   }
 
-  constructor(driver, targetId) {
-    super(driver);
-    this.screenshotCount = 0;
-    this.targetId = targetId;
+  preloadAllMessages() {
+    return this.checkAllMessagesPreloaded()
+    .then(
+      allMessagesPreloaded =>
+        allMessagesPreloaded ? this
+                             : this.scrollUp()
+                               .then(
+                                 () => this.preloadAllMessages()
+                               )
+    );
+  }
+
+  checkAllMessagesPreloaded() {
+    return checkElementLoaded(
+      this.driver,
+      By.className(FacebookMessengerPage.topTextClassName)
+    );
   }
 
   focusInputForm() {
@@ -158,38 +171,57 @@ class FacebookMessengerPage extends Page {
     );
   }
 
-  captureAllMessages() {
+  takeScreenshot() {
+    return this.driver.takeScreenshot();
+  }
+}
 
+class MessageScreenshots {
+  constructor() {
+    this.array = [];
   }
 
-  checkAllMessagesPreloaded() {
-    return checkElementLoaded(
-      this.driver,
-      By.className(FacebookMessengerPage.topTextClassName)
-    );
-  }
-
-  checkExtraMessagesLoading() {
-    return checkElementLoaded(
-      this.driver,
-      By.className(FacebookMessengerPage.extraMessagesBufferClassName)
-    );
-  }
-
-  checkExtraMessagesLoaded() {
-    return this.checkExtraMessagesLoading()
+  record(messengerPage) {
+    return messengerPage.preloadAllMessages() // TODO This is too long
     .then(
-      loading => !loading
-    );
-  }
-
-  saveScreenshot() {
-    this.driver.takeScreenshot()
-    .then(
-      screenshot => saveScreenshot(`${this.targetId}/${this.screenshotCount}`, screenshot)
+      () => this.takeScreenshotOf(messengerPage)
     )
     .then(
-      () => ++this.screenshotCount
+      () => promise.all([
+        messengerPage.scrollDown(),
+        this.takeScreenshotOf(messengerPage)
+      ])
+    )
+    .then(
+      () => this.checkAllMessagesRecorded()
+    )
+    .then(
+      allMessagesRecorded => 
+        allMessagesRecorded ? this : this.record(messengerPage)
+    );
+  }
+
+  takeScreenshotOf(messengerPage) {
+    return messengerPage.takeScreenshot()
+    .then(
+      screenshot => this.array.push(screenshot)
+    );
+  }
+
+  checkAllMessagesRecorded() {
+    if (this.array.length < 3)
+      return false;
+    return this.array[this.array.length-1] == this.array[this.array.length-2] &&
+           this.array[this.array.length-2] == this.array[this.array.length-3];
+  }
+
+  saveToDirectory(directory) {
+    return mkdir(directory)
+    .then(
+      () => forEachAsync(
+        this.array,
+        (screenshot, index) => saveScreenshot(`${directory}/${index}`, screenshot)
+      )
     );
   }
 }
@@ -219,6 +251,9 @@ class NotificationsDialogue {
   }
 }
 
+const forEachAsync = (arr, asyncFunc) =>
+  promise.all(arr.map(asyncFunc));
+
 const saveScreenshot = (path, png) =>
   new Promise(
     (resolve, reject) => fs.writeFile(
@@ -246,21 +281,8 @@ const untilDocumentLoaded = driver => {
   return driver.executeScript(documentIsComplete);
 }
 
-const getTooltipContent = element =>
-  element.getAttribute('data-tooltip-content')
-
-const formatAsHtmlLines = strings => strings.join('<br>');
-
-const getAllHtmlSources = elements =>
-  promiseEach(elements, getHtmlSource);
-
-const getHtmlSource = element => element.getAttribute('innerHTML');
-
-const stringContains = (text, substring) =>
-  text.indexOf(substring) !== -1;
-
 const userId = userUri => 
-  stringContains(userUri, 'profile.php') ?
+  userUri.includes('profile.php') ?
     userUri.slice((`${FacebookHomePage.uri}profile.php?id=`).length) :
     userUri.slice(FacebookHomePage.uri.length);
 
@@ -274,86 +296,29 @@ const clickButton = (driver, findBy) =>
     element => element.click()
   );
 
-const untilAllElementsLoaded = (...findBys) => {
-  const predicates = findBys.map(
-    findBy => untilElementLoaded(findBy)
-  );
-  return allPredicates(...predicates);
-}
-
-const untilElementLoaded = findBy => 
-  driver => checkElementLoaded(driver, findBy);
-
 const checkElementLoaded = (elementContainer, findBy) =>
   elementContainer.findElements(findBy).then(
     elements => !!elements.length
   );
 
-const allPredicates = (...predicates) => 
-  (...args) => predicates.every(pred => pred(...args));
-
-const fetchMessagesWithUser = (driver, targetId) =>
+const captureMessagesWithUser = (driver, targetId) =>
   FacebookMessengerPage.loadMessagesWith(driver, targetId)
   .then(
     messengerPage => messengerPage.preloadAllMessages()
   )
   .then(
-    messengerPage => messengerPage.getMessages()
-  );
-
-const promiseEach = (elements, asyncFunc) =>
-  promise.all(elements.map(asyncFunc));
-
-const decodeMessages = messages =>
-  promiseEach(messages, message => message.decodeHtml());
-
-const writeMessagesToFile = (messages, fd) =>
-  decodeMessages(messages)
+    messengerPage => new MessageScreenshots().record(messengerPage)
+  )
   .then(
-    decodedMessages => writeDecodedMessagesToFile(decodedMessages, fd)
+    screenshots => screenshots.saveToDirectory(targetId)
   );
-
-const writeDecodedMessagesToFile = (decodedMessages, fd) => 
-  promiseEach(
-    decodedMessages,
-    decodedMessage => 
-      PromisedFs.appendFile(fd, formatDecodedMessage(decodedMessage))
-  );
-
-const formatDecodedMessage = ([sender, timestamp, content]) =>
-  `${sender} (${timestamp}): ${content}<br><br>`;
 
 const processTarget = (driver, targetUri) => {
   const targetId = userId(targetUri);
-
-  return fetchMessagesWithUser(driver, targetId)
-  .then(
-    messages => promise.all([
-        openHtmlFileForAppending(`${targetId}.html`),
-        promise.fulfilled(messages)
-      ])
-  )
-  .then(
-    ([fd, messages]) => writeMessagesToFile(messages, fd)
-  );
+  return captureMessagesWithUser(driver, targetId);
 }
 
-const openHtmlFileForAppending = fileName =>
-  PromisedFs.open(fileName, 'a')
-  .then(
-    fd => prepareHtmlFile(fd)
-  );
-
-const prepareHtmlFile = fd =>
-  PromisedFs.appendFile(
-    fd, 
-    `<meta charset="utf8">${thisMoment()}<br><br><br>`
-  )
-  .then(
-    () => fd
-  );
-
-const thisMoment = () =>
+const thisMoment = () => // TODO Make use of this  ???
   new Date().toString();
 
 const processTargets = (driver, [targetUri, ...remainingTargetUris]) => {
@@ -392,4 +357,3 @@ FacebookLoginPage.load(driver)
 .then(
   () => processTargets(driver, targetUris)
 )
-
