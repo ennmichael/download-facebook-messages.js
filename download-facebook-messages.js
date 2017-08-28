@@ -17,11 +17,7 @@ class Page {
 
 class FacebookLoginPage extends Page {
   static load(driver) {
-    return loadPage(
-      driver,
-      FacebookLoginPage.uri,
-      FacebookLoginPage.untilLoaded
-    )
+    return driver.get(FacebookLoginPage.uri)
     .then(() => new FacebookLoginPage(driver));
   }  
 
@@ -39,15 +35,6 @@ class FacebookLoginPage extends Page {
 
   static get loginButtonId() {
     return 'loginbutton';
-  }
-
-  static get untilLoaded() {
-    return untilAllElementsLoaded( 
-      // TODO Ditch this and just use untilDocumentLoaded
-      By.id(FacebookLoginPage.emailFormId),
-      By.id(FacebookLoginPage.passwordFormId),
-      By.id(FacebookLoginPage.loginButtonId)
-    );
   }
 
   fillOut({email, password}) {
@@ -75,11 +62,11 @@ class FacebookLoginPage extends Page {
 
   clickLoginButton() {
     return clickButton(
-      this.driver, 
+      this.driver,
       By.id(FacebookLoginPage.loginButtonId)
     )
     .then(
-      () => this.driver.wait(FacebookHomePage.untilLoaded)
+      () => this.driver.wait(untilDocumentLoaded)
     )
     .then(
       () => new FacebookHomePage(this.driver)
@@ -95,24 +82,16 @@ class FacebookHomePage extends Page {
   static get notNowButtonClassName() {
     return 'layerCancel _4jy0 _4jy3 _517h _51sy _42ft';
   }
-
-  static get untilLoaded() {
-    return untilDocumentLoaded;
-  } 
 }
 
 class FacebookMessengerPage extends Page {
-  static loadMessagesWith(driver, userId) {
-    return loadPage(
-      driver,
-      FacebookMessengerPage.uriForUser(userId),
-      FacebookMessengerPage.untilMessagesLoaded
-    )
+  static loadMessagesWith(driver, targetId) {
+    driver.get(FacebookMessengerPage.uriForUser(targetId))
     .then(
       NotificationsDialogue.denyIfNeeded(driver)
     )
     .then(
-      () => new FacebookMessengerPage(driver).focusInputForm()
+      () => new FacebookMessengerPage(driver, targetId).focusInputForm()
     )
   }
 
@@ -132,10 +111,20 @@ class FacebookMessengerPage extends Page {
     return '_1mf _1mj';
   }
 
+  static get extraMessagesBufferClassName() {
+    return '_3u55 _3qh2 img sp_dWkVmyYN8i1 sx_2563d0';
+  }
+
   static get untilMessagesLoaded() {
     return untilElementLoaded(
       By.className(FacebookMessengerPage.messageBoxClassName)
     );
+  }
+
+  constructor(driver, targetId) {
+    super(driver);
+    this.screenshotCount = 0;
+    this.targetId = targetId;
   }
 
   focusInputForm() {
@@ -149,35 +138,28 @@ class FacebookMessengerPage extends Page {
   }
 
   scrollUp(inputForm) {
+    return this.sendKey(Key.PAGE_UP);
+  }
+
+  scrollDown(inputForm) {
+    return this.sendKey(Key.PAGE_DOWN);
+  }
+
+  sendKey(key) {
     return this.getInputForm()
     .then(
-      inputForm => inputForm.sendKeys(Key.PAGE_UP)
+      inputForm => inputForm.sendKeys(key)
     );
   }
 
-  getMessages() {
-    return this.findMessageWebElements()
-    .then(
-      elements => elements.map(element => new Message(element))
+  getInputForm() {
+    return this.driver.findElement(
+      By.className(FacebookMessengerPage.inputFormClassName)
     );
   }
 
-  findMessageWebElements() {
-    return this.driver.findElements(
-      By.className(FacebookMessengerPage.messageBoxClassName)
-    );
-  }
+  captureAllMessages() {
 
-  preloadAllMessages() {
-    return this.checkAllMessagesPreloaded()
-    .then(
-      allMessagesPreloaded =>
-        allMessagesPreloaded ? this
-                             : this.scrollUp()
-                               .then(
-                                 () => this.preloadAllMessages()
-                               )
-    );
   }
 
   checkAllMessagesPreloaded() {
@@ -187,78 +169,28 @@ class FacebookMessengerPage extends Page {
     );
   }
 
-  getInputForm() {
-    return this.driver.findElement(
-      By.className(FacebookMessengerPage.inputFormClassName)
-    );
-  }
-}
-
-class Message {
-  static get senderSpanClassName() {
-    return '_ih3';
-  }
-
-  static get contentSpanClassName() {
-    return '_3oh- _58nk';
-  }
-
-  static get timestampDivSelector() {
-    return 'div[data-hover="tooltip"';
-  }
-
-  constructor(webElement) {
-    this.webElement = webElement;
-  }
-  
-  decodeSender() {
-    return this.getSenderSpan()
-    .then(
-      senderSpan => getHtmlSource(senderSpan)
+  checkExtraMessagesLoading() {
+    return checkElementLoaded(
+      this.driver,
+      By.className(FacebookMessengerPage.extraMessagesBufferClassName)
     );
   }
 
-  getSenderSpan() {
-    return this.webElement.findElement(By.className(
-      Message.senderSpanClassName
-    ));
+  checkExtraMessagesLoaded() {
+    return this.checkExtraMessagesLoading()
+    .then(
+      loading => !loading
+    );
   }
 
-  decodeContent() {
-    return this.getContentSpans()
+  saveScreenshot() {
+    this.driver.takeScreenshot()
     .then(
-      contentSpans => getAllHtmlSources(contentSpans)
+      screenshot => saveScreenshot(`${this.targetId}/${this.screenshotCount}`, screenshot)
     )
     .then(
-      htmlSources => formatAsLines(htmlSources)
+      () => ++this.screenshotCount
     );
-  }
-
-  getContentSpans() {
-    return this.webElement.findElements(By.className(
-      Message.contentSpanClassName
-    ));
-  }
-
-  decodeTimestamp() {
-    return this.getTimestampDiv()
-    .then(
-      timestampDiv => getTooltipContent(timestampDiv)
-    );
-  }
-
-  getTimestampDiv() {
-    return this.webElement.findElement(By.css(
-      Message.timestampDivSelector
-    ));
-  }
-
-  decodeHtml() {
-    return promise.all([
-      this.decodeSender(),
-      this.decodeTimestamp(),
-      this.decodeContent()
-    ]);
   }
 }
 
@@ -287,14 +219,26 @@ class NotificationsDialogue {
   }
 }
 
-// TODO These "driver" arguments are misleading, perhaps "elementContainer"
+const saveScreenshot = (path, png) =>
+  new Promise(
+    (resolve, reject) => fs.writeFile(
+      path, 
+      png, 
+      'base64', 
+      fsCallback(resolve, reject)
+    )
+  );
 
-const untilEither = (promise1, promise2) =>
-  driver => 
-    promise1(driver)
-    .then(
-      over => over ? true : promise2(driver)
-    );
+const mkdir = path =>
+  new Promise(
+    (resolve, reject) => fs.mkdir(path, fsCallback(resolve, reject))
+  );
+
+const fsCallback = (resolve, reject) =>
+  err => {
+    if (err) reject(err);
+    else resolve();
+  };
 
 const untilDocumentLoaded = driver => {
   const documentIsComplete = () =>
@@ -305,17 +249,12 @@ const untilDocumentLoaded = driver => {
 const getTooltipContent = element =>
   element.getAttribute('data-tooltip-content')
 
-const formatAsLines = strings => strings.join('<br>');
+const formatAsHtmlLines = strings => strings.join('<br>');
 
 const getAllHtmlSources = elements =>
   promiseEach(elements, getHtmlSource);
 
 const getHtmlSource = element => element.getAttribute('innerHTML');
-
-const loadPage = (driver, uri, condition) => {
-  driver.get(uri);
-  return driver.wait(condition);
-};
 
 const stringContains = (text, substring) =>
   text.indexOf(substring) !== -1;
@@ -345,35 +284,13 @@ const untilAllElementsLoaded = (...findBys) => {
 const untilElementLoaded = findBy => 
   driver => checkElementLoaded(driver, findBy);
 
-const checkElementLoaded = (driver, findBy) =>
-  driver.findElements(findBy).then(
+const checkElementLoaded = (elementContainer, findBy) =>
+  elementContainer.findElements(findBy).then(
     elements => !!elements.length
   );
 
 const allPredicates = (...predicates) => 
   (...args) => predicates.every(pred => pred(...args));
-
-const promisedFs = {}; // TODO Turn into a static class
-
-promisedFs.open = (path, flags, mode = undefined) =>
-  new Promise(
-    (resolve, reject) => 
-      fs.open(
-        path, flags, mode,
-        promisedFs._promiseCallback(resolve, reject)
-      )
-  );
-
-promisedFs.appendFile = (file, data, options = undefined) => 
-  new Promise(
-    (resolve, reject) => fs.appendFile(
-      file, data, options,
-      promisedFs._promiseCallback(resolve, reject)
-    )
-  );
-
-promisedFs._promiseCallback = (resolve, reject) => 
-  (err, result) => err ? reject(err) : resolve(result);
 
 const fetchMessagesWithUser = (driver, targetId) =>
   FacebookMessengerPage.loadMessagesWith(driver, targetId)
@@ -400,7 +317,7 @@ const writeDecodedMessagesToFile = (decodedMessages, fd) =>
   promiseEach(
     decodedMessages,
     decodedMessage => 
-      promisedFs.appendFile(fd, formatDecodedMessage(decodedMessage))
+      PromisedFs.appendFile(fd, formatDecodedMessage(decodedMessage))
   );
 
 const formatDecodedMessage = ([sender, timestamp, content]) =>
@@ -422,13 +339,13 @@ const processTarget = (driver, targetUri) => {
 }
 
 const openHtmlFileForAppending = fileName =>
-  promisedFs.open(fileName, 'a')
+  PromisedFs.open(fileName, 'a')
   .then(
     fd => prepareHtmlFile(fd)
   );
 
 const prepareHtmlFile = fd =>
-  promisedFs.appendFile(
+  PromisedFs.appendFile(
     fd, 
     `<meta charset="utf8">${thisMoment()}<br><br><br>`
   )
