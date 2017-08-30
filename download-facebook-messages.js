@@ -338,33 +338,37 @@ const processTargets = (driver, [targetUri, ...remainingTargetUris]) => {
   return promise.fulfilled();
 }
 
-if (process.argv.length < 3 || process.argv[2] === '--help') {
-  const usage = 
-    'Usage: node download-facebook-messages.js ' +
-    '<email> <password> <targetUrls>';
-  console.log(usage);
-  process.exit(0);
+if (require.main === module) {
+
+  if (process.argv.length < 3 || process.argv[2] === '--help') {
+    const usage = 
+      'Usage: node download-facebook-messages.js ' +
+      '<email> <password> <targetUrls>';
+    console.log(usage);
+    process.exit(0);
+  }
+
+  const credentials = {
+    email: process.argv[2],
+    password: process.argv[3]
+  };
+
+  const targetUris = process.argv.slice(4);
+
+  const driver = new webdriver.Builder().forBrowser(browser).build();
+
+  FacebookLoginPage.load(driver)
+  .then(
+    loginPage => loginPage.fillOut(credentials)
+  )
+  .then(
+    loginPage => loginPage.clickLoginButton()
+  )
+  .then(
+    () => processTargets(driver, targetUris)
+  )
+  .catch(
+    err => console.log(err)
+  );
+
 }
-
-const credentials = {
-  email: process.argv[2],
-  password: process.argv[3]
-};
-
-const targetUris = process.argv.slice(4);
-
-const driver = new webdriver.Builder().forBrowser(browser).build();
-
-FacebookLoginPage.load(driver)
-.then(
-  loginPage => loginPage.fillOut(credentials)
-)
-.then(
-  loginPage => loginPage.clickLoginButton()
-)
-.then(
-  () => processTargets(driver, targetUris)
-)
-.catch(
-  err => console.log(err)
-);
