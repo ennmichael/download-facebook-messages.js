@@ -91,7 +91,7 @@ class FacebookMessengerPage extends Page {
       NotificationsDialogue.denyIfNeeded(driver)
     )
     .then(
-      () => new FacebookMessengerPage(driver, targetId).focusInputForm()
+      () => new FacebookMessengerPage(driver).focusInputForm()
     )
   }
 
@@ -107,7 +107,7 @@ class FacebookMessengerPage extends Page {
     return '_1n-e';
   }
 
-  static get inputFormClassName() {
+  static get inputFormClassName() { // TODO Stale element????????????????????????
     return '_1mf _1mj';
   }
 
@@ -116,7 +116,7 @@ class FacebookMessengerPage extends Page {
   }
 
   static get untilMessagesLoaded() {
-    return untilElementLoaded(
+    return until.elementLocated(
       By.className(FacebookMessengerPage.messageBoxClassName)
     );
   }
@@ -124,12 +124,11 @@ class FacebookMessengerPage extends Page {
   preloadAllMessages() {
     return this.checkAllMessagesPreloaded()
     .then(
-      allMessagesPreloaded =>
-        allMessagesPreloaded ? this
-                             : this.scrollUp()
-                               .then(
-                                 () => this.preloadAllMessages()
-                               )
+      allMessagesPreloaded => 
+        allMessagesPreloaded ? this : this.scrollUp()
+    )
+    .then(
+      result => result || this.preloadAllMessages()
     );
   }
 
@@ -150,11 +149,11 @@ class FacebookMessengerPage extends Page {
     );
   }
 
-  scrollUp(inputForm) {
+  scrollUp() {
     return this.sendKey(Key.PAGE_UP);
   }
 
-  scrollDown(inputForm) {
+  scrollDown() {
     return this.sendKey(Key.PAGE_DOWN);
   }
 
@@ -184,12 +183,12 @@ class MessageScreenshots {
   record(messengerPage) {
     return messengerPage.preloadAllMessages() // TODO This is too long
     .then(
-      () => this.takeScreenshotOf(messengerPage)
+      () => this.addScreenshotOf(messengerPage)
     )
     .then(
       () => promise.all([
         messengerPage.scrollDown(),
-        this.takeScreenshotOf(messengerPage)
+        this.addScreenshotOf(messengerPage)
       ])
     )
     .then(
@@ -201,7 +200,7 @@ class MessageScreenshots {
     );
   }
 
-  takeScreenshotOf(messengerPage) {
+  addScreenshotOf(messengerPage) {
     return messengerPage.takeScreenshot()
     .then(
       screenshot => this.array.push(screenshot)
@@ -216,7 +215,7 @@ class MessageScreenshots {
   }
 
   saveToDirectory(directory) {
-    return mkdir(directory)
+    return promisedFs.mkdir(directory)
     .then(
       () => forEachAsync(
         this.array,
@@ -230,10 +229,8 @@ class NotificationsDialogue {
   static denyIfNeeded(driver) {
     return NotificationsDialogue.checkPoppedUp(driver)
     .then(
-      poppedUp => {
-        if (poppedUp)
-          NotificationsDialogue.deny(driver);
-      }
+      poppedUp =>
+        poppedUp ? NotificationsDialogue.deny(driver) : undefined
     );
   }
 
@@ -255,29 +252,40 @@ const forEachAsync = (arr, asyncFunc) =>
   promise.all(arr.map(asyncFunc));
 
 const saveScreenshot = (path, png) =>
-  new Promise(
-    (resolve, reject) => fs.writeFile(
-      path, 
-      png, 
-      'base64', 
-      fsCallback(resolve, reject)
-    )
+  promisedFs.writeFile(
+    path,
+    png,
+    'base64'
   );
 
-const mkdir = path =>
-  new Promise(
-    (resolve, reject) => fs.mkdir(path, fsCallback(resolve, reject))
-  );
+const saveThisMoment = path =>
+  promisedFs.writeFile(path, thisMoment());
 
-const fsCallback = (resolve, reject) =>
-  err => {
-    if (err) reject(err);
-    else resolve();
-  };
+const thisMoment = () =>
+  new Date().toString();
+
+const promisedFs = {
+  mkdir: path =>
+    new Promise(
+      (resolve, reject) => 
+        fs.mkdir(path, promisedFs.fsCallback(resolve, reject))
+    ),
+
+  writeFile: (path, data, options=undefined) =>
+    new Promise(
+      (resolve, reject) => 
+        fs.writeFile(path, data, options, promisedFs.fsCallback(resolve, reject))
+    ),
+
+  fsCallback: (resolve, reject) =>
+    err => {
+      if (err) reject(err);
+      else resolve();
+    }
+}
 
 const untilDocumentLoaded = driver => {
-  const documentIsComplete = () =>
-    document.readyState === 'complete';
+  const documentIsComplete = 'return document.readyState === "complete"';
   return driver.executeScript(documentIsComplete);
 }
 
@@ -311,15 +319,15 @@ const captureMessagesWithUser = (driver, targetId) =>
   )
   .then(
     screenshots => screenshots.saveToDirectory(targetId)
+  )
+  .then(
+    () => saveThisMoment(`${targetId}/date`)
   );
 
 const processTarget = (driver, targetUri) => {
   const targetId = userId(targetUri);
   return captureMessagesWithUser(driver, targetId);
 }
-
-const thisMoment = () => // TODO Make use of this  ???
-  new Date().toString();
 
 const processTargets = (driver, [targetUri, ...remainingTargetUris]) => {
   if (targetUri)
@@ -335,7 +343,7 @@ if (process.argv.length < 3 || process.argv[2] === '--help') {
     'Usage: node download-facebook-messages.js ' +
     '<email> <password> <targetUrls>';
   console.log(usage);
-  return 0;
+  process.exit(0);
 }
 
 const credentials = {
@@ -357,3 +365,6 @@ FacebookLoginPage.load(driver)
 .then(
   () => processTargets(driver, targetUris)
 )
+.catch(
+  err => console.log(err)
+);
